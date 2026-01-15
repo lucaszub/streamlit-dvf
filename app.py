@@ -7,8 +7,8 @@ from datetime import datetime
 
 # Configuration de la page
 st.set_page_config(
-    page_title="Analyse DVF - Valeurs Foncières",
-    page_icon="🏠",
+    page_title="Recherche DVF - Valeurs Foncières",
+    page_icon="🔍",
     layout="wide"
 )
 
@@ -109,7 +109,8 @@ def get_mutations(_conn, commune=None, rue=None, type_local=None):
 
 # Interface principale
 def main():
-    st.title("🏠 Analyse des Valeurs Foncières (DVF)")
+    st.title("🔍 Recherche de Transactions Immobilières (DVF)")
+    st.markdown("Recherchez et analysez des transactions immobilières par commune, rue et type de bien")
     st.markdown("---")
 
     # Connexion à Snowflake

@@ -1,0 +1,191 @@
+# DVF (Demandes de Valeurs Foncières) - Snowflake Semantic Layer
+
+This project analyzes French real estate transaction data using a Snowflake data warehouse.
+
+## Database Structure
+
+**Database**: VALFONC_ANALYTICS
+**Schema**: GOLD
+
+## Data Model Overview
+
+The semantic model follows a star schema with dimension tables and a central fact table for real estate mutations (transactions).
+
+---
+
+## Dimension Tables
+
+### DIM_ADDRESS
+**Primary Key**: ADDRESS_ID
+
+Physical street addresses including street numbers, street names, postal codes, and city names in France.
+
+**Key Fields**:
+- `ADDRESS_ID`: Unique identifier for each address record
+- `ADDRESS`: Full physical street address
+- `NO_VOIE`: Street number or building number
+- `TYPE_DE_VOIE`: Type of street (ACH, AV, CHS, etc.)
+- `VOIE`: Street name
+- `CODE_POSTAL`: Postal code
+- `COMMUNE`: French commune name (smallest administrative division)
+- `CODE_DEPARTEMENT`: French department code (administrative division)
+- `CREATED_AT`: Timestamp when the record was created
+
+**Sample Values**:
+- TYPE_DE_VOIE: "ACH", "AV", "CHS"
+- CODE_DEPARTEMENT: "36", "78", "44"
+- COMMUNE: "MONT-DE-MARSAN", "SUCCIEU", "ALFORTVILLE"
+
+---
+
+### DIM_CODE_POSTAL
+**Primary Key**: CODE_POSTAL_ID
+
+Postal codes and their associated geographic information.
+
+**Key Fields**:
+- `CODE_POSTAL_ID`: Unique identifier for postal codes
+- `CODE_POSTAL`: Postal code value
+- `COMMUNE`: Associated commune name
+- `CODE_DEPARTEMENT`: Department code
+- `VOIE`: Street names or road designations
+- `CREATED_AT`: Timestamp when the record was created
+
+**Sample Values**:
+- CODE_POSTAL: "3420", "31750", "3300"
+- CODE_DEPARTEMENT: "11", "12", "01"
+
+---
+
+### DIM_COMMUNE
+**Primary Key**: COMMUNE_ID
+
+French communes (municipalities) with their departmental codes.
+
+**Key Fields**:
+- `COMMUNE_ID`: Unique identifier for each commune
+- `COMMUNE`: Name of the French commune/municipality
+- `CODE_DEPARTEMENT`: Departmental code identifying the administrative department
+- `CREATED_AT`: Timestamp when the record was created
+
+**Sample Values**:
+- COMMUNE: "BRANSLES", "SACQUENVILLE", "ABILLY"
+- CODE_DEPARTEMENT: "45", "70", "07"
+
+---
+
+### DIM_PARCELLE
+**Primary Key**: PARCELLE_ID
+
+Land parcels with their cadastral identifying characteristics.
+
+**Key Fields**:
+- `PARCELLE_ID`: Unique technical key for cadastral parcel identification (calculated from cadastral elements)
+- `PREFIXE_DE_SECTION`: Optional section prefix (rarely used, only in some departments)
+- `SECTION`: Cadastral section code (e.g., "AB", "AC", "AD", "AJ", "BA")
+- `NO_PLAN`: Plan number (most important identifier for the parcel in the section)
+- `NO_VOLUME`: Volume number (optional, used for complex subdivisions like condominiums)
+- `IS_PARTIAL`: Quality indicator:
+  - 1 = incomplete parcel identifier (SECTION or NO_PLAN missing)
+  - 0 = complete identifier
+- `CREATED_AT`: Timestamp when the record was created
+
+**Sample Values**:
+- SECTION: "AD", "AJ", "BA"
+- NO_PLAN: "77", "1109", "786"
+- IS_PARTIAL: "0" (complete)
+
+---
+
+### DIM_TYPE_LOCAL
+**Primary Key**: TYPE_LOCAL_ID
+
+Local type classifications for properties.
+
+**Key Fields**:
+- `TYPE_LOCAL_ID`: Unique identifier for local type records
+- `TYPE_LOCAL`: Type or category of local property/building
+- `SOURCE_SYSTEM`: Source system that originated the data
+- `CREATED_AT`: Timestamp when the record was created
+
+**Sample Values**:
+- TYPE_LOCAL: "MAISON", "LOCAL INDUSTRIEL. COMMERCIAL OU ASSIMILÉ", "APPARTEMENT", "INCONNU"
+- SOURCE_SYSTEM: "DVF"
+
+---
+
+## Fact Table
+
+### FACT_MUTATION
+Real estate transactions and property transfers.
+
+**Key Fields**:
+
+**Foreign Keys**:
+- `ADDRESS_ID`: Links to DIM_ADDRESS
+- `CODE_POSTAL_ID`: Links to DIM_CODE_POSTAL
+- `COMMUNE_ID`: Links to DIM_COMMUNE
+- `TYPE_LOCAL_ID`: Links to DIM_TYPE_LOCAL
+- `PARCELLE_ID`: Links to DIM_PARCELLE
+
+**Transaction Details**:
+- `DATE_MUTATION`: Date when the mutation/transaction occurred
+- `NATURE_MUTATION`: Nature/type of property mutation transaction (e.g., "Vente")
+- `VALEUR_FONCIERE`: Property value in local currency (EUR)
+- `ADDRESS_MATCH_STRATEGY`: Strategy used to match addresses ("MATCH_ADDRESS", "FALLBACK_COMMUNE")
+
+**Property Characteristics**:
+- `SURFACE_REELLE_BATI`: Actual built surface area in square meters
+- `SURFACE_TERRAIN`: Surface area of the terrain/land
+- `NOMBRE_PIECES_PRINCIPALES`: Number of main rooms in the property
+
+**Metadata**:
+- `CREATED_AT`: Timestamp when the mutation record was created
+
+**Sample Values**:
+- NATURE_MUTATION: "Vente"
+- VALEUR_FONCIERE: "17000", "350000", "65660" (in EUR)
+- SURFACE_REELLE_BATI: "274", "1243", "320" (in m²)
+- NOMBRE_PIECES_PRINCIPALES: "5", "0"
+- DATE_MUTATION: "2025-05-19", "2025-05-15", "2025-03-21"
+
+---
+
+## Relationships
+
+```
+FACT_MUTATION
+├── ADDRESS: FACT_MUTATION(ADDRESS_ID) → DIM_ADDRESS(ADDRESS_ID)
+├── CODE_POSTAL: FACT_MUTATION(CODE_POSTAL_ID) → DIM_CODE_POSTAL(CODE_POSTAL_ID)
+├── COMMUNE: FACT_MUTATION(COMMUNE_ID) → DIM_COMMUNE(COMMUNE_ID)
+└── TYPE_LOCAL: FACT_MUTATION(TYPE_LOCAL_ID) → DIM_TYPE_LOCAL(TYPE_LOCAL_ID)
+```
+
+---
+
+## Common Query Patterns
+
+### Price Analysis by Period
+Use `FACT_MUTATION.DATE_MUTATION` to group by time periods (year, quarter, month).
+Calculate median price using `MEDIAN(FACT_MUTATION.VALEUR_FONCIERE)`.
+
+### Geographic Analysis
+Join through `COMMUNE` and `ADDRESS` to analyze by location.
+Use `CODE_DEPARTEMENT` for departmental aggregations.
+
+### Property Type Analysis
+Join with `DIM_TYPE_LOCAL` to segment by property type (MAISON, APPARTEMENT, etc.).
+
+### Surface Analysis
+Use `SURFACE_REELLE_BATI` for built area and `SURFACE_TERRAIN` for land area.
+Calculate price per square meter: `VALEUR_FONCIERE / SURFACE_REELLE_BATI`.
+
+---
+
+## Notes
+
+- All monetary values (`VALEUR_FONCIERE`) are in EUR
+- All surface measurements are in square meters (m²)
+- Date fields use standard date format (YYYY-MM-DD)
+- NULL values may exist for optional fields
+- The data covers French real estate transactions (DVF system)
