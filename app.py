@@ -103,7 +103,7 @@ def get_mutations(_conn, commune=None, rue=None, type_local=None):
     if type_local and type_local != "Tous":
         query += f" AND t.TYPE_LOCAL = '{type_local}'"
 
-    query += " ORDER BY f.DATE_MUTATION DESC LIMIT 5000"
+    query += " ORDER BY f.DATE_MUTATION DESC limit 100000"
 
     return run_query(_conn, query)
 
@@ -228,11 +228,15 @@ def main():
         # Prix par type de local
         if "TYPE_LOCAL" in df.columns:
             st.subheader("🏘️ Prix moyen par type de bien")
-            df_type = df.groupby("TYPE_LOCAL").agg({
-                "VALEUR_FONCIERE": "mean",
-                "TYPE_LOCAL": "count"
-            }).reset_index(names="TYPE_LOCAL")
-            df_type.columns = ["TYPE_LOCAL", "PRIX_MOYEN", "NOMBRE"]
+            # Utiliser une named-aggregation pour éviter les colonnes dupliquées
+            df_type = df.groupby("TYPE_LOCAL").agg(
+                PRIX_MOYEN=("VALEUR_FONCIERE", "mean"),
+                NOMBRE=("TYPE_LOCAL", "count")
+            ).reset_index()
+
+            # S'assurer que PRIX_MOYEN est numérique et remplacer les NaN
+            df_type["PRIX_MOYEN"] = pd.to_numeric(df_type["PRIX_MOYEN"], errors="coerce").fillna(0)
+            df_type["PRIX_MOYEN"] = df_type["PRIX_MOYEN"].round(0)
 
             fig_type = px.bar(
                 df_type,
