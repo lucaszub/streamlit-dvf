@@ -94,131 +94,89 @@ def main():
     # Bouton de prédiction
     if st.button("🔮 Estimer le prix", type="primary"):
         with st.spinner("Calcul de l'estimation..."):
-            # Requête pour prédire le prix basé sur des biens similaires
-            prediction_query = f"""
-            SELECT
-                AVG(f.VALEUR_FONCIERE) as PRIX_ESTIME,
-                MEDIAN(f.VALEUR_FONCIERE) as PRIX_MEDIAN,
-                MIN(f.VALEUR_FONCIERE) as PRIX_MIN,
-                MAX(f.VALEUR_FONCIERE) as PRIX_MAX,
-                COUNT(*) as NB_COMPARABLES
-            FROM VALFONC_ANALYTICS.GOLD.FACT_MUTATION f
-            LEFT JOIN VALFONC_ANALYTICS.GOLD.DIM_ADDRESS a ON f.ADDRESS_ID = a.ADDRESS_ID
-            LEFT JOIN VALFONC_ANALYTICS.GOLD.DIM_TYPE_LOCAL t ON f.TYPE_LOCAL_ID = t.TYPE_LOCAL_ID
-            WHERE a.CODE_POSTAL = '{postal}'
-                AND t.TYPE_LOCAL = '{type_bien}'
-                AND f.NOMBRE_PIECES_PRINCIPALES = {pieces}
-                AND f.SURFACE_REELLE_BATI BETWEEN {surface * 0.8} AND {surface * 1.2}
-                AND f.VALEUR_FONCIERE > 0
-                AND f.DATE_MUTATION >= DATEADD(year, -3, CURRENT_DATE())
-            """
-
-            result_df = run_query(conn, prediction_query)
-
-            if not result_df.empty and result_df["NB_COMPARABLES"].iloc[0] > 0:
-                prix_estime = result_df["PRIX_ESTIME"].iloc[0]
-                prix_median = result_df["PRIX_MEDIAN"].iloc[0]
-                prix_min = result_df["PRIX_MIN"].iloc[0]
-                prix_max = result_df["PRIX_MAX"].iloc[0]
-                nb_comparables = int(result_df["NB_COMPARABLES"].iloc[0])
-
-                # Affichage du résultat principal
-                st.success(f"### 💰 Prix estimé : {prix_estime:,.0f} €")
-
-                # Métriques détaillées
-                st.markdown("---")
-                st.subheader("📊 Détails de l'estimation")
-
-                col1, col2, col3, col4 = st.columns(4)
-
-                with col1:
-                    st.metric("Prix moyen", f"{prix_estime:,.0f} €")
-
-                with col2:
-                    st.metric("Prix médian", f"{prix_median:,.0f} €")
-
-                with col3:
-                    st.metric("Fourchette min", f"{prix_min:,.0f} €")
-
-                with col4:
-                    st.metric("Fourchette max", f"{prix_max:,.0f} €")
-
-                st.info(f"📈 Cette estimation est basée sur **{nb_comparables}** transactions similaires des 3 dernières années")
-
-                # Afficher des biens similaires
-                st.markdown("---")
-                st.subheader("🏘️ Biens similaires récents")
-
-                similar_query = f"""
-                SELECT
-                    f.DATE_MUTATION,
-                    a.COMMUNE,
-                    a.CODE_POSTAL,
-                    a.VOIE,
-                    t.TYPE_LOCAL,
-                    f.NOMBRE_PIECES_PRINCIPALES as PIECES,
-                    f.SURFACE_REELLE_BATI as SURFACE_M2,
-                    f.VALEUR_FONCIERE as PRIX
-                FROM VALFONC_ANALYTICS.GOLD.FACT_MUTATION f
-                LEFT JOIN VALFONC_ANALYTICS.GOLD.DIM_ADDRESS a ON f.ADDRESS_ID = a.ADDRESS_ID
-                LEFT JOIN VALFONC_ANALYTICS.GOLD.DIM_TYPE_LOCAL t ON f.TYPE_LOCAL_ID = t.TYPE_LOCAL_ID
-                WHERE a.CODE_POSTAL = '{postal}'
-                    AND t.TYPE_LOCAL = '{type_bien}'
-                    AND f.NOMBRE_PIECES_PRINCIPALES = {pieces}
-                    AND f.SURFACE_REELLE_BATI BETWEEN {surface * 0.8} AND {surface * 1.2}
-                    AND f.VALEUR_FONCIERE > 0
-                    AND f.DATE_MUTATION >= DATEADD(year, -2, CURRENT_DATE())
-                ORDER BY f.DATE_MUTATION DESC
-                LIMIT 10
+            try:
+                # Utilisation de la fonction PREDICT_PROPERTY_PRICE de Snowflake
+                prediction_query = f"""
+                SELECT PREDICT_PROPERTY_PRICE({surface}, {pieces}, '{postal}', '{type_bien}') as PRIX_ESTIME
                 """
 
-                similar_df = run_query(conn, similar_query)
+                result_df = run_query(conn, prediction_query)
 
-                if not similar_df.empty:
-                    # Formater les colonnes pour l'affichage
-                    similar_df["DATE_MUTATION"] = pd.to_datetime(similar_df["DATE_MUTATION"]).dt.strftime('%Y-%m-%d')
-                    similar_df["PRIX"] = similar_df["PRIX"].apply(lambda x: f"{x:,.0f} €" if pd.notna(x) else "N/A")
-                    similar_df["SURFACE_M2"] = similar_df["SURFACE_M2"].apply(lambda x: f"{x:.0f} m²" if pd.notna(x) else "N/A")
+                if not result_df.empty and result_df["PRIX_ESTIME"].iloc[0] is not None:
+                    prix_estime = float(result_df["PRIX_ESTIME"].iloc[0])
 
-                    st.dataframe(similar_df, use_container_width=True, hide_index=True)
+                    # Affichage du résultat principal
+                    st.success(f"### 💰 Prix estimé : {prix_estime:,.0f} €")
+
+                    # Afficher des biens similaires avec la fonction FIND_SIMILAR_PROPERTIES
+                    st.markdown("---")
+                    st.subheader("🏘️ Biens similaires récents")
+
+                    similar_query = f"""
+                    SELECT *
+                    FROM TABLE(FIND_SIMILAR_PROPERTIES({surface}, {pieces}, '{postal}', '{type_bien}'))
+                    """
+
+                    similar_df = run_query(conn, similar_query)
+
+                    if not similar_df.empty:
+                        # Formater les colonnes pour l'affichage
+                        if "DATE_MUTATION" in similar_df.columns:
+                            similar_df["DATE_MUTATION"] = pd.to_datetime(similar_df["DATE_MUTATION"]).dt.strftime('%Y-%m-%d')
+                        if "PRIX" in similar_df.columns:
+                            similar_df["PRIX"] = similar_df["PRIX"].apply(lambda x: f"{x:,.0f} €" if pd.notna(x) else "N/A")
+                        if "VALEUR_FONCIERE" in similar_df.columns:
+                            similar_df["VALEUR_FONCIERE"] = similar_df["VALEUR_FONCIERE"].apply(lambda x: f"{x:,.0f} €" if pd.notna(x) else "N/A")
+                        if "SURFACE_M2" in similar_df.columns:
+                            similar_df["SURFACE_M2"] = similar_df["SURFACE_M2"].apply(lambda x: f"{x:.0f} m²" if pd.notna(x) else "N/A")
+                        if "SURFACE_REELLE_BATI" in similar_df.columns:
+                            similar_df["SURFACE_REELLE_BATI"] = similar_df["SURFACE_REELLE_BATI"].apply(lambda x: f"{x:.0f} m²" if pd.notna(x) else "N/A")
+
+                        st.dataframe(similar_df, use_container_width=True, hide_index=True)
+
+                        st.info(f"📈 Cette estimation est basée sur **{len(similar_df)}** transactions similaires")
+                    else:
+                        st.info("Aucun bien similaire récent trouvé")
+
                 else:
-                    st.info("Aucun bien similaire récent trouvé pour l'affichage détaillé")
+                    st.warning("⚠️ Pas assez de données comparables pour cette estimation")
+                    st.info("""
+                    **Suggestions :**
+                    - Essayez avec un code postal différent
+                    - Modifiez le nombre de pièces
+                    - Ajustez la surface du bien
+                    """)
 
-            else:
-                st.warning("⚠️ Pas assez de données comparables pour cette estimation")
-                st.info("""
-                **Suggestions :**
-                - Essayez avec un code postal différent
-                - Modifiez le nombre de pièces
-                - Ajustez la surface du bien
-                """)
+                    # Proposer des alternatives
+                    st.markdown("---")
+                    st.subheader("📍 Codes postaux avec le plus de données")
 
-                # Proposer des alternatives
-                st.markdown("---")
-                st.subheader("📍 Codes postaux avec le plus de données")
+                    alternative_query = f"""
+                    SELECT
+                        a.CODE_POSTAL,
+                        COUNT(*) as NB_TRANSACTIONS,
+                        AVG(f.VALEUR_FONCIERE) as PRIX_MOYEN
+                    FROM VALFONC_ANALYTICS.GOLD.FACT_MUTATION f
+                    LEFT JOIN VALFONC_ANALYTICS.GOLD.DIM_ADDRESS a ON f.ADDRESS_ID = a.ADDRESS_ID
+                    LEFT JOIN VALFONC_ANALYTICS.GOLD.DIM_TYPE_LOCAL t ON f.TYPE_LOCAL_ID = t.TYPE_LOCAL_ID
+                    WHERE t.TYPE_LOCAL = '{type_bien}'
+                        AND f.NOMBRE_PIECES_PRINCIPALES = {pieces}
+                        AND f.VALEUR_FONCIERE > 0
+                    GROUP BY a.CODE_POSTAL
+                    ORDER BY NB_TRANSACTIONS DESC
+                    LIMIT 10
+                    """
 
-                alternative_query = f"""
-                SELECT
-                    a.CODE_POSTAL,
-                    COUNT(*) as NB_TRANSACTIONS,
-                    AVG(f.VALEUR_FONCIERE) as PRIX_MOYEN
-                FROM VALFONC_ANALYTICS.GOLD.FACT_MUTATION f
-                LEFT JOIN VALFONC_ANALYTICS.GOLD.DIM_ADDRESS a ON f.ADDRESS_ID = a.ADDRESS_ID
-                LEFT JOIN VALFONC_ANALYTICS.GOLD.DIM_TYPE_LOCAL t ON f.TYPE_LOCAL_ID = t.TYPE_LOCAL_ID
-                WHERE t.TYPE_LOCAL = '{type_bien}'
-                    AND f.NOMBRE_PIECES_PRINCIPALES = {pieces}
-                    AND f.VALEUR_FONCIERE > 0
-                GROUP BY a.CODE_POSTAL
-                ORDER BY NB_TRANSACTIONS DESC
-                LIMIT 10
-                """
+                    alternative_df = run_query(conn, alternative_query)
 
-                alternative_df = run_query(conn, alternative_query)
+                    if not alternative_df.empty:
+                        alternative_df["PRIX_MOYEN"] = alternative_df["PRIX_MOYEN"].apply(lambda x: f"{x:,.0f} €")
+                        alternative_df.columns = ["Code Postal", "Nombre de transactions", "Prix moyen"]
+                        st.dataframe(alternative_df, use_container_width=True, hide_index=True)
 
-                if not alternative_df.empty:
-                    alternative_df["PRIX_MOYEN"] = alternative_df["PRIX_MOYEN"].apply(lambda x: f"{x:,.0f} €")
-                    alternative_df.columns = ["Code Postal", "Nombre de transactions", "Prix moyen"]
-                    st.dataframe(alternative_df, use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la prédiction : {e}")
+                st.info("Vérifiez que les fonctions PREDICT_PROPERTY_PRICE et FIND_SIMILAR_PROPERTIES existent dans votre base Snowflake")
 
 if __name__ == "__main__":
     main()
