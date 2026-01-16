@@ -74,13 +74,24 @@ def get_disctinct_code_postal(conn, departement=None):
         return run_query(conn, query)
 
 
-def get_commune(con):
-    query = """
-        SELECT DISTINCT commune AS commune
-        FROM dim_commune
-        ORDER BY commune
+def get_commune(conn, departement=None):
+    """Retourne les communes distinctes, optionnellement filtrées par département"""
+    base = """
+        SELECT DISTINCT dcm.commune AS commune
+        FROM dim_commune AS dcm
     """
-    return run_query(conn, query)
+    if departement:
+        # Joindre avec dim_code_postal pour filtrer par département
+        base += """
+        INNER JOIN fact_mutation AS fm ON dcm.commune_id = fm.commune_id
+        INNER JOIN dim_code_postal AS dcp ON fm.code_postal_id = dcp.code_postal_id
+        WHERE dcp.code_departement = %s
+        """
+        query = base + "\n        ORDER BY dcm.commune"
+        return run_query(conn, query, (departement,))
+    else:
+        query = base + "\n        ORDER BY dcm.commune"
+        return run_query(conn, query)
 def get_disctinct_departement(conn):
     query = """
         SELECT DISTINCT code_departement AS departement
@@ -195,44 +206,58 @@ def get_df(conn, code_postal=None, type_local=None, nombre_pieces_principales=No
 
 
 conn = get_snowflake_connection()
-# récupération sûre des options (gestion si la connexion échoue ou si les résultats sont vides)
-commune_df = get_commune(conn) if conn is not None else pd.DataFrame()
+
+# === FILTRE 1: DÉPARTEMENT ===
 departement_df = get_disctinct_departement(conn) if conn is not None else pd.DataFrame()
-departement_options = departement_df.iloc[:, 0].tolist() if not departement_df.empty else ["75"]
+departement_options = ["Tout"] + (departement_df.iloc[:, 0].tolist() if not departement_df.empty else [])
+departement = st.sidebar.selectbox("Département", departement_options, index=0)
+departement_filter = None if departement == "Tout" else departement
 
-departement = st.sidebar.selectbox("Entrez le code departement", departement_options, index=0)
-commune = st.sidebar.selectbox("Entrez la commune", commune_df.iloc[:, 0].tolist() if not commune_df.empty else ["PARIS"], index=0)
+# === FILTRE 2: CODE POSTAL (filtré par département) ===
+if departement_filter:
+    postal_df = get_disctinct_code_postal(conn, departement_filter) if conn is not None else pd.DataFrame()
+else:
+    postal_df = get_disctinct_code_postal(conn) if conn is not None else pd.DataFrame()
+postal_options = ["Tout"] + (postal_df.iloc[:, 0].tolist() if not postal_df.empty else [])
+code_postal = st.sidebar.selectbox("Code postal", postal_options, index=0)
+code_postal_filter = None if code_postal == "Tout" else code_postal
 
-# maintenant que le département est sélectionné, récupérer les codes postaux correspondants
-postal_df = get_disctinct_code_postal(conn, departement) if conn is not None else pd.DataFrame()
-postal_options = postal_df.iloc[:, 0].tolist() if not postal_df.empty else ["75001"]
+# === FILTRE 3: COMMUNE (filtrée par département) ===
+if departement_filter:
+    commune_df = get_commune(conn, departement_filter) if conn is not None else pd.DataFrame()
+else:
+    commune_df = get_commune(conn) if conn is not None else pd.DataFrame()
+commune_options = ["Tout"] + (commune_df.iloc[:, 0].tolist() if not commune_df.empty else [])
+commune = st.sidebar.selectbox("Commune", commune_options, index=0)
+commune_filter = None if commune == "Tout" else commune
 
+# === FILTRE 4: TYPE DE LOCAL ===
 type_df = get_disctinct_type_local(conn) if conn is not None else pd.DataFrame()
-type_options = type_df.iloc[:, 0].tolist() if not type_df.empty else ["Appartement"]
+type_options = ["Tout"] + (type_df.iloc[:, 0].tolist() if not type_df.empty else [])
+type_local = st.sidebar.selectbox("Type de local", type_options, index=0)
+type_local_filter = None if type_local == "Tout" else type_local
 
-code_postal = st.sidebar.selectbox("Entrez le code postal", postal_options, index=0)
+# === FILTRE 5: VOIE (filtrée par département et code postal) ===
+voie_df = get_disctinct_voie(conn, departement=departement_filter, code_postal=code_postal_filter) if conn is not None else pd.DataFrame()
+voie_options = ["Tout"] + (voie_df.iloc[:, 0].tolist() if not voie_df.empty else [])
+voie = st.sidebar.selectbox("Voie", voie_options, index=0)
+voie_filter = None if voie == "Tout" else voie
 
-type_local = st.sidebar.selectbox("Entrez le type de local", type_options, index=0)
-
-nombre_pieces_principales = st.sidebar.slider("Entrez le nombre de pièces principales", min_value=1, max_value=10, value=1)
-
-# récupérer les voies en fonction du département et/ou code postal sélectionnés
-voie_df = get_disctinct_voie(conn, departement=departement, code_postal=code_postal) if conn is not None else pd.DataFrame()
-voie_options = voie_df.iloc[:, 0].tolist() if not voie_df.empty else [""]
-voie = st.sidebar.selectbox("Entrez la voie (optionnel)", voie_options, index=0)
+# === FILTRE 6: NOMBRE DE PIÈCES ===
+nombre_pieces_principales = st.sidebar.slider("Nombre de pièces principales", min_value=1, max_value=10, value=1)
 
 
 
-annee = st.sidebar.selectbox(
-    "Sélectionner l'année",
-    options=get_annee_options(conn)["ANNEE"].tolist() if conn is not None else [2023],
-    index=0
-)
+# === FILTRE 7: ANNÉE ===
+annee_df = get_annee_options(conn) if conn is not None else pd.DataFrame({"ANNEE": [2023]})
+annee_options = ["Tout"] + (annee_df["ANNEE"].tolist() if not annee_df.empty else [])
+annee = st.sidebar.selectbox("Année", options=annee_options, index=0)
+annee_filter = None if annee == "Tout" else annee
+
 st.sidebar.header("Filtres sélectionnés")
 
-
-
-df = get_df(conn, code_postal, type_local, nombre_pieces_principales, annee, departement, voie)
+# Appel de get_df avec les filtres (None si "Tout" est sélectionné)
+df = get_df(conn, code_postal_filter, type_local_filter, nombre_pieces_principales, annee_filter, departement_filter, voie_filter, commune_filter)
 
 mean_price = df['VALEUR_FONCIERE'].mean() if not df.empty else 0
 
