@@ -68,6 +68,16 @@ def get_departements(_conn):
     """
     return run_query(_conn, query)
 
+def get_postal(_conn):
+    """Récupère la liste des départements"""
+    query = """
+    SELECT DISTINCT P.CODE_POSTAL 
+    FROM VALFONC_ANALYTICS.GOLD.DIM_CODE_POSTAL P
+    INNER JOIN VALFONC_ANALYTICS.GOLD.FACT_MUTATION AS M ON P.CODE_POSTAL_ID = M.CODE_POSTAL_ID
+    ORDER BY P.CODE_POSTAL
+    """
+    return run_query(_conn, query)
+
 # Fonction pour récupérer les données temporelles
 @st.cache_data(ttl=600)
 def get_temporal_data(_conn, period_type, commune=None, departement=None, type_local=None, start_date=None, end_date=None):
@@ -205,16 +215,69 @@ def main():
     departements_df = get_departements(conn)
     departements_list = ["Tous"] + sorted(departements_df["CODE_DEPARTEMENT"].tolist())
     selected_departement = st.sidebar.selectbox("Département", departements_list)
+    
+    # Charger les codes postaux
+    code_postal_df = get_postal(conn)
+    code_postal_list = ["Tous"] + sorted(code_postal_df["CODE_POSTAL"].tolist())
+    selected_code_postal = st.sidebar.selectbox("Code Postal", code_postal_list)
 
-    # Filtre commune
+    # Filtre commune (filtre par département ET/OU code postal)
     selected_commune = None
+    # Récupérer toutes les communes disponibles
+    communes_df = get_communes(conn)
+
+    # Appliquer filtre département si nécessaire
     if selected_departement != "Tous":
-        communes_df = get_communes(conn)
-        communes_filtered = communes_df[communes_df["CODE_DEPARTEMENT"] == selected_departement]
-        communes_list = ["Toutes"] + sorted(communes_filtered["COMMUNE"].tolist())
+        communes_df = communes_df[communes_df["CODE_DEPARTEMENT"] == selected_departement]
+
+        # Récupérer les codes postaux valides pour le département sélectionné
+        query_cp_dept = f"""
+        SELECT DISTINCT p.CODE_POSTAL
+        FROM VALFONC_ANALYTICS.GOLD.DIM_CODE_POSTAL p
+        INNER JOIN VALFONC_ANALYTICS.GOLD.FACT_MUTATION m ON p.CODE_POSTAL_ID = m.CODE_POSTAL_ID
+        INNER JOIN VALFONC_ANALYTICS.GOLD.DIM_COMMUNE c ON m.COMMUNE_ID = c.COMMUNE_ID
+        WHERE c.CODE_DEPARTEMENT = '{selected_departement}'
+        ORDER BY p.CODE_POSTAL
+        """
+        cp_dept_df = run_query(conn, query_cp_dept)
+        valid_cp = set(cp_dept_df["CODE_POSTAL"].tolist()) if not cp_dept_df.empty else set()
+
+        # Si le code postal sélectionné n'appartient pas au département, on l'ignore (évite le mélange 35 vs 45)
+        if selected_code_postal != "Tous" and selected_code_postal not in valid_cp:
+            st.sidebar.warning("Le code postal sélectionné n'appartient pas au département choisi. Le filtre code postal est ignoré.")
+            selected_code_postal_effective = "Tous"
+        else:
+            selected_code_postal_effective = selected_code_postal
+    else:
+        selected_code_postal_effective = selected_code_postal
+
+    # Appliquer filtre code postal si nécessaire (obtenir les communes liées au code postal)
+    if selected_code_postal_effective != "Tous":
+        query_communes_par_cp = f"""
+        SELECT DISTINCT c.COMMUNE, c.CODE_DEPARTEMENT
+        FROM VALFONC_ANALYTICS.GOLD.DIM_CODE_POSTAL p
+        INNER JOIN VALFONC_ANALYTICS.GOLD.FACT_MUTATION m ON p.CODE_POSTAL_ID = m.CODE_POSTAL_ID
+        INNER JOIN VALFONC_ANALYTICS.GOLD.DIM_COMMUNE c ON m.COMMUNE_ID = c.COMMUNE_ID
+        WHERE p.CODE_POSTAL = '{selected_code_postal_effective}'
+        ORDER BY c.COMMUNE
+        """
+        communes_par_cp = run_query(conn, query_communes_par_cp)
+        # Intersecter avec les communes déjà filtrées par département (si applicable)
+        if not communes_df.empty:
+            communes_df = communes_df[communes_df["COMMUNE"].isin(communes_par_cp["COMMUNE"].tolist())]
+        else:
+            communes_df = communes_par_cp
+
+    # Construire la liste des communes à afficher
+    if not communes_df.empty:
+        communes_list = ["Toutes"] + sorted(communes_df["COMMUNE"].tolist())
         selected_commune = st.sidebar.selectbox("Commune", communes_list)
         if selected_commune == "Toutes":
             selected_commune = None
+    else:
+        # Pas de communes disponibles pour les filtres choisis
+        st.sidebar.info("Aucune commune disponible pour le filtre sélectionné")
+        selected_commune = None
 
     # Filtre type de bien
     st.sidebar.subheader("Type de bien")
