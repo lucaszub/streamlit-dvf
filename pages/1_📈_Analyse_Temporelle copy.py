@@ -198,7 +198,7 @@ def get_df(conn, code_postal=None, type_local=None, nombre_pieces_principales=No
     if where_clauses:
         base_query += "\n        WHERE " + " AND ".join(where_clauses)
 
-    base_query += "\n        ORDER BY fm.valeur_fonciere DESC\n        LIMIT 1000\n    "
+    base_query += "\n        ORDER BY fm.valeur_fonciere DESC\n     "
 
     # run_query acceptera None ou tuple(params)
     return run_query(conn, base_query, tuple(params) if params else None)
@@ -271,6 +271,6 @@ with col2:
 with col3:
     st.metric("Nombre de pièces principales", f"{nombre_pieces_principales}")
     
-st.dataframe(df)
+st.dataframe(df.head(50))
 
 
